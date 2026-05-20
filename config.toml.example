@@ -1,0 +1,44 @@
+# Declarative Configuration for Secure Local Workspace MCP Server
+
+[server]
+# The Unix Domain Socket path to bind to for JSON-RPC MCP communication.
+# Default: /tmp/workspace_mcp.sock
+socket_path = "/tmp/workspace_mcp.sock"
+
+[security]
+# Enforce a sandbox directory for the `read_isolated_file` tool.
+# Access is strictly limited to files under this directory tree.
+# The server will expand user home symbols (~) and resolve absolute paths.
+# Strict directory traversal checks will be performed (preventing use of "..").
+sandbox_directory = "~/.workspace_mcp_sandbox"
+
+# Configure the command execution permissions for the `execute_job` tool.
+[execution]
+# Default timeout (in seconds) for child processes. If a command runs longer, it will be terminated.
+default_timeout_seconds = 30.0
+
+# Allowed commands/binaries. Only command names listed here are allowed to execute.
+# For each command, the binary path must be absolute and arguments can optionally be restricted 
+# using a list of permitted regular expression patterns.
+# If `allowed_arguments_regex` is omitted, any argument pattern is permitted.
+
+[[execution.allowed_commands]]
+name = "echo"
+binary = "/bin/echo"
+
+[[execution.allowed_commands]]
+name = "ls"
+binary = "/bin/ls"
+allowed_arguments_regex = [
+    "^-[la]{1,2}$",
+    "^$"
+]
+
+[[execution.allowed_commands]]
+name = "git"
+binary = "/usr/bin/git"
+allowed_arguments_regex = [
+    "^status$",
+    "^log(\\s+-n\\s+\\d+)?$",
+    "^diff$"
+]
