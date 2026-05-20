@@ -2,6 +2,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+
 def load_config(config_path: str) -> dict[str, Any]:
     """Loads and parses the configuration from a TOML file.
 

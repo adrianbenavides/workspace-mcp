@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+
 def read_isolated_file(path_str: str, sandbox_dir_str: str) -> str:
     """Reads a file from the secure sandbox, enforcing path traversal and symlink checks.
 
@@ -25,7 +26,7 @@ def read_isolated_file(path_str: str, sandbox_dir_str: str) -> str:
     # If the user passed an absolute path, prevent traversal attempt
     # Resolve the combined path to canonical form
     raw_target_path = Path(os.path.expanduser(path_str))
-    
+
     if raw_target_path.is_absolute():
         # Absolute path traversal check
         raise ValueError("Access denied: absolute path escape attempted.")
@@ -67,6 +68,7 @@ def read_isolated_file(path_str: str, sandbox_dir_str: str) -> str:
         return resolved_path.read_text(encoding="utf-8")
     except FileNotFoundError:
         raise FileNotFoundError(f"File not found inside sandbox: {path_str}")
+
 
 async def execute_job(command_name: str, args: list[str], config: dict[str, Any]) -> str:
     """Executes a whitelisted command in a secure, isolated sandbox environment.
@@ -117,13 +119,13 @@ async def execute_job(command_name: str, args: list[str], config: dict[str, Any]
                     matched = True
                     break
             if not matched:
-                raise ValueError(f"Access denied: Argument rejection for '{arg}'. Does not match allowed patterns.")
+                raise ValueError(
+                    f"Access denied: Argument rejection for '{arg}'. Does not match allowed patterns."
+                )
 
     # 3. Environment Sanitization
     # Only keep basic safe system path defaults, completely clearing standard host environment
-    cleaned_env = {
-        "PATH": "/bin:/usr/bin:/sbin:/usr/sbin"
-    }
+    cleaned_env = {"PATH": "/bin:/usr/bin:/sbin:/usr/sbin"}
 
     # 4. Timeout Configuration
     default_timeout = execution_config.get("default_timeout_seconds", 30.0)
@@ -137,14 +139,14 @@ async def execute_job(command_name: str, args: list[str], config: dict[str, Any]
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=cleaned_env
+            env=cleaned_env,
         )
 
         # Wait for the subprocess with timeout
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
 
         if proc.returncode != 0:
-            # Return stderr output combined or just decoded stdout. 
+            # Return stderr output combined or just decoded stdout.
             # Our tests expect stdout or standard returned command outputs.
             return stdout.decode(errors="replace")
 

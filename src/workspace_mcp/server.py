@@ -1,13 +1,33 @@
 import asyncio
 from pathlib import Path
+from typing import Any
 from mcp.server import Server
 from mcp.types import Tool
+import mcp.types as types
 
-def create_server(name: str) -> Server:
-    """Creates and configures the MCP server instance."""
+
+def create_server(name: str, config: dict[str, Any] | None = None) -> Server:
+    """Creates and configures the MCP server instance.
+
+    Args:
+        name: The name of the MCP server.
+        config: The optional server configuration dictionary.
+
+    Returns:
+        A configured Server instance.
+    """
     server = Server(name)
 
-    @server.list_tools() # type: ignore
+    # Load default config if none provided
+    if config is None:
+        try:
+            from workspace_mcp.config import load_config
+
+            config = load_config("config.toml")
+        except FileNotFoundError:
+            config = {}
+
+    @server.list_tools()  # type: ignore
     async def handle_list_tools() -> list[Tool]:
         """List available tools."""
         return [
@@ -29,17 +49,99 @@ def create_server(name: str) -> Server:
                     "type": "object",
                     "properties": {
                         "command": {"type": "string", "description": "The whitelisted command to execute."},
-                        "args": {"type": "array", "items": {"type": "string"}, "description": "Arguments for the command."}
+                        "args": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Arguments for the command.",
+                        },
                     },
                     "required": ["command"],
                 },
             ),
         ]
 
+    @server.call_tool()  # type: ignore
+    async def handle_call_tool(name: str, arguments: dict[str, Any] | None) -> types.CallToolResult:
+        """Handle execution of registered tools."""
+        from workspace_mcp.tools import read_isolated_file, execute_job
+
+        args = arguments or {}
+
+        if name == "read_isolated_file":
+            path_str = args.get("path")
+            if not path_str or not isinstance(path_str, str):
+                return types.CallToolResult(
+                    content=[
+                        types.TextContent(type="text", text="Error: Missing or invalid 'path' parameter.")
+                    ],
+                    isError=True,
+                )
+
+            # Fetch sandbox directory from config
+            sandbox_dir = (
+                (config or {}).get("security", {}).get("sandbox_directory", "~/.workspace_mcp_sandbox")
+            )
+            try:
+                content = read_isolated_file(path_str, sandbox_dir)
+                return types.CallToolResult(
+                    content=[types.TextContent(type="text", text=content)],
+                    isError=False,
+                )
+            except Exception as e:
+                return types.CallToolResult(
+                    content=[types.TextContent(type="text", text=str(e))],
+                    isError=True,
+                )
+
+        elif name == "execute_job":
+            command = args.get("command")
+            if not command or not isinstance(command, str):
+                return types.CallToolResult(
+                    content=[
+                        types.TextContent(type="text", text="Error: Missing or invalid 'command' parameter.")
+                    ],
+                    isError=True,
+                )
+
+            cmd_args = args.get("args", [])
+            if not isinstance(cmd_args, list) or not all(isinstance(a, str) for a in cmd_args):
+                return types.CallToolResult(
+                    content=[
+                        types.TextContent(
+                            type="text", text="Error: 'args' parameter must be a list of strings."
+                        )
+                    ],
+                    isError=True,
+                )
+
+            try:
+                stdout = await execute_job(command, cmd_args, config or {})
+                return types.CallToolResult(
+                    content=[types.TextContent(type="text", text=stdout)],
+                    isError=False,
+                )
+            except Exception as e:
+                return types.CallToolResult(
+                    content=[types.TextContent(type="text", text=str(e))],
+                    isError=True,
+                )
+
+        else:
+            return types.CallToolResult(
+                content=[types.TextContent(type="text", text=f"Error: Unknown tool '{name}'.")],
+                isError=True,
+            )
+
     return server
 
+
 async def run_server(server: Server, socket_path: str) -> None:
-    """Runs the MCP server using a Unix Domain Socket transport."""
+    """Runs the MCP server using a Unix Domain Socket transport.
+
+    Args:
+        server: The Server instance to run.
+        socket_path: The Unix domain socket file path to bind the server to.
+    """
     path = Path(socket_path)
     if path.exists():
         path.unlink()
@@ -93,21 +195,14 @@ async def run_server(server: Server, socket_path: str) -> None:
         init_options = InitializationOptions(
             server_name=server.name,
             server_version="0.1.0",
-            capabilities=types.ServerCapabilities(
-                tools=types.ToolsCapability(listChanged=True)
-            )
+            capabilities=types.ServerCapabilities(tools=types.ToolsCapability(listChanged=True)),
         )
 
         try:
             async with anyio.create_task_group() as tg:
                 tg.start_soon(socket_reader)
                 tg.start_soon(socket_writer)
-                await server.run(
-                    read_stream,
-                    write_stream,
-                    init_options,
-                    raise_exceptions=True
-                )
+                await server.run(read_stream, write_stream, init_options, raise_exceptions=True)
         except Exception:
             pass
         finally:
@@ -118,7 +213,7 @@ async def run_server(server: Server, socket_path: str) -> None:
                 pass
 
     srv = await asyncio.start_unix_server(handle_client, socket_path)
-    
+
     try:
         async with srv:
             await srv.serve_forever()
@@ -127,6 +222,7 @@ async def run_server(server: Server, socket_path: str) -> None:
     finally:
         if path.exists():
             path.unlink()
+
 
 if __name__ == "__main__":
     import argparse
