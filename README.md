@@ -113,8 +113,18 @@ To test the server connection, fetch its tool schemas, and simulate an agent com
 uv run python -m mcp.client
 ```
 
-### 5. Running Tests
-Run the pytest suite to verify tools and security boundary behavior:
+### 5. Development
+
+Run checks (linting and tests):
 ```bash
-uv run pytest
+uv run poe check
+```
+
+Run specific tasks:
+
+```bash
+uv run poe lint    # Run ruff check
+uv run poe format  # Run ruff format
+uv run poe test    # Run pytest
+uv run mypy .      # Run type checking
 ```
