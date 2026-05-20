@@ -153,6 +153,18 @@ async def run_server(server: Server, socket_path: str) -> None:
         from mcp.shared.message import SessionMessage
         from mcp.server.models import InitializationOptions
 
+        # The MCP server framework (built on AnyIO) requires anyio MemoryStreams (SendStream/ReceiveStream)
+        # to communicate with its transport layer. Since we are using standard asyncio.start_unix_server
+        # which provides asyncio.StreamReader/StreamWriter, we use anyio memory object streams as a bridge:
+        #
+        # 1. read_stream / read_stream_writer: Adapts the asyncio socket reader. The custom `socket_reader`
+        #    coroutine reads raw JSON lines from the UDS, validates them, and pushes them into read_stream_writer.
+        #    The server reads these parsed messages from read_stream.
+        # 2. write_stream / write_stream_reader: Adapts the asyncio socket writer. The server pushes outgoing
+        #    messages into write_stream. The custom `socket_writer` coroutine reads them from write_stream_reader
+        #    and writes them as JSON lines back to the UDS socket writer.
+        #
+        # Based on the official stdio transport: https://github.com/modelcontextprotocol/python-sdk/blob/main/src/mcp/server/stdio.py
         read_stream_writer, read_stream = anyio.create_memory_object_stream(0)
         write_stream, write_stream_reader = anyio.create_memory_object_stream(0)
 
@@ -199,9 +211,11 @@ async def run_server(server: Server, socket_path: str) -> None:
         )
 
         try:
+            # Create a task group to run the socket reader/writer functions in parallel
             async with anyio.create_task_group() as tg:
                 tg.start_soon(socket_reader)
                 tg.start_soon(socket_writer)
+                # Block until the server exits/fails
                 await server.run(read_stream, write_stream, init_options, raise_exceptions=True)
         except Exception:
             pass
