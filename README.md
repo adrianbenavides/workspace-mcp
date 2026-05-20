@@ -101,19 +101,32 @@ Sync the dependencies and initialize the virtual environment:
 uv sync
 ```
 
-### 3. Run the Server
+### 3. Run the demo
+
 Startup the daemon, specifying the configuration:
 ```bash
-uv run python -m mcp.server --config config.toml
+PYTHONPATH=src uv run python -m workspace_mcp.server --config config.toml
 ```
 
-### 4. Run the Client Demonstration
 To test the server connection, fetch its tool schemas, and simulate an agent command:
 ```bash
-uv run python -m mcp.client
+PYTHONPATH=src uv run python -m workspace_mcp.client
 ```
 
-### 5. Development
+To test all the features:
+```bash
+uv run python demo/test_mcp_interactive.py
+```
+
+Observe the raw JSON-RPC response payloads:
+- **`test.txt` valid read**: Returns a standard `TextContent` block with `isError=False`.
+- **Traversal escapes (`../` and `/etc/passwd`)**: Denied immediately by the server, returning a descriptive `Access denied` message inside `TextContent` with `isError=True`.
+- **`echo HelloSecureWorld`**: Returns the standard output with `isError=False`.
+- **`cat` command**: Blocked by security validation, returning `Access denied: command 'cat' is not whitelisted` with `isError=True`.
+- **Chained malicious args (`hello; rm -rf /`)**: Blocked by regex validations, returning `Argument rejection` with `isError=True`.
+- **`sleep 5` command**: Triggers the async subprocess execution timeout (1.0s limit configured for `sleep`), returning `Command 'sleep' timed out after 1.0 seconds` with `isError=True`.
+
+### . Development
 
 Run checks (linting and tests):
 ```bash
