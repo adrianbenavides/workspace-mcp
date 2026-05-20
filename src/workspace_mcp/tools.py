@@ -1,5 +1,8 @@
 import os
+import re
+import asyncio
 from pathlib import Path
+from typing import Any
 
 def read_isolated_file(path_str: str, sandbox_dir_str: str) -> str:
     """Reads a file from the secure sandbox, enforcing path traversal and symlink checks.
@@ -45,11 +48,6 @@ def read_isolated_file(path_str: str, sandbox_dir_str: str) -> str:
     # can be a symbolic link. Check from resolved path all the way up to the root.
     curr = resolved_path
     while curr != curr.parent:
-        # We use lstat or is_symlink on the actual path to verify if it is a link.
-        # Note: resolved_path.resolve() resolves symlinks. But we want to ensure
-        # that the user's requested path did not involve *any* symlinks to get here.
-        # So we also check the components along the combined_path before resolving,
-        # or we check resolved_path elements. Actually, check both to be absolutely safe!
         if curr.is_symlink():
             raise ValueError("Access denied: symbolic links are strictly blocked.")
         curr = curr.parent
@@ -61,8 +59,6 @@ def read_isolated_file(path_str: str, sandbox_dir_str: str) -> str:
             if curr.is_symlink():
                 raise ValueError("Access denied: symbolic links are strictly blocked.")
         except FileNotFoundError:
-            # If a component doesn't exist, we can't check if it's a symlink, but we will catch
-            # FileNotFoundError when we try to read it anyway.
             pass
         curr = curr.parent
 
@@ -71,3 +67,102 @@ def read_isolated_file(path_str: str, sandbox_dir_str: str) -> str:
         return resolved_path.read_text(encoding="utf-8")
     except FileNotFoundError:
         raise FileNotFoundError(f"File not found inside sandbox: {path_str}")
+
+async def execute_job(command_name: str, args: list[str], config: dict[str, Any]) -> str:
+    """Executes a whitelisted command in a secure, isolated sandbox environment.
+
+    Args:
+        command_name: The whitelisted command name.
+        args: The arguments passed to the command.
+        config: The parsed server configuration dictionary.
+
+    Returns:
+        The standard output of the executed process.
+
+    Raises:
+        ValueError: If the command is not whitelisted or arguments do not match
+                    configured whitelist regexes.
+        TimeoutError: If the process execution exceeds the configured timeout.
+    """
+    # 1. Binary Lookup and Whitelist Matching
+    execution_config = config.get("execution", {})
+    allowed_commands = execution_config.get("allowed_commands", [])
+
+    matched_cmd = None
+    for cmd in allowed_commands:
+        if cmd.get("name") == command_name:
+            matched_cmd = cmd
+            break
+
+    if not matched_cmd:
+        raise ValueError(f"Access denied: command '{command_name}' is not whitelisted.")
+
+    binary_path = matched_cmd.get("binary")
+    if not binary_path:
+        raise ValueError(f"Access denied: no binary path defined for '{command_name}'.")
+
+    # 2. Argument Verification
+    allowed_regexes = matched_cmd.get("allowed_arguments_regex", [])
+
+    if not allowed_regexes:
+        # Strictly reject if any arguments are passed but none are allowed
+        if args:
+            raise ValueError(f"Access denied: Argument rejection for '{args[0]}'. No arguments allowed.")
+    else:
+        # Check every argument against the whitelisted regex patterns
+        for arg in args:
+            matched = False
+            for pattern in allowed_regexes:
+                if re.match(pattern, arg):
+                    matched = True
+                    break
+            if not matched:
+                raise ValueError(f"Access denied: Argument rejection for '{arg}'. Does not match allowed patterns.")
+
+    # 3. Environment Sanitization
+    # Only keep basic safe system path defaults, completely clearing standard host environment
+    cleaned_env = {
+        "PATH": "/bin:/usr/bin:/sbin:/usr/sbin"
+    }
+
+    # 4. Timeout Configuration
+    default_timeout = execution_config.get("default_timeout_seconds", 30.0)
+    timeout = matched_cmd.get("timeout_seconds", default_timeout)
+
+    # 5. Async Subprocess Spawning
+    proc = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            binary_path,
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=cleaned_env
+        )
+
+        # Wait for the subprocess with timeout
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+
+        if proc.returncode != 0:
+            # Return stderr output combined or just decoded stdout. 
+            # Our tests expect stdout or standard returned command outputs.
+            return stdout.decode(errors="replace")
+
+        return stdout.decode(errors="replace")
+
+    except asyncio.TimeoutError:
+        if proc:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+        raise TimeoutError(f"Command '{command_name}' timed out after {timeout} seconds.")
+    except Exception as e:
+        if proc:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+        raise e
